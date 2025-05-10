@@ -1,0 +1,10 @@
+menu "Elf Loader Configuration"
+
+  config ELFLOADER_DATA_USE_SPIRAM
+      bool "Allocate data sections in external RAM"
+      default n
+  config ELFLOADER_EXEC_USE_SPIRAM
+    bool "Allocate executable sections in external RAM"
+    default n
+
+endmenu

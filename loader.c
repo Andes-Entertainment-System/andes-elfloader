@@ -82,8 +82,18 @@ static const char* TAG = "elfLoader";
 #include "esp_system.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+
+#ifdef CONFIG_ELFLOADER_EXEC_USE_SPIRAM
+#define LOADER_ALLOC_EXEC(size) heap_caps_malloc(size, MALLOC_CAP_EXEC | MALLOC_CAP_32BIT | MALLOC_CAP_SPIRAM)
+#else
 #define LOADER_ALLOC_EXEC(size) heap_caps_malloc(size, MALLOC_CAP_EXEC | MALLOC_CAP_32BIT)
+#endif
+
+#ifdef CONFIG_ELFLOADER_DATA_USE_SPIRAM
+#define LOADER_ALLOC_DATA(size) heap_caps_malloc(size, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM)
+#else
 #define LOADER_ALLOC_DATA(size) heap_caps_malloc(size, MALLOC_CAP_8BIT)
+#endif
 
 #define LOADER_GETDATA(ctx, off, buffer, size) \
     unalignedCpy(buffer, ctx->fd + off, size);
