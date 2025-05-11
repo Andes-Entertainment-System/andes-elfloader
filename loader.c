@@ -63,15 +63,14 @@ static const char *TAG = "elfLoader";
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_mmu_map.h"
 #include "esp_system.h"
-
-#define LOADER_ALLOC_EXEC(size) heap_caps_malloc(size, MALLOC_CAP_EXEC | MALLOC_CAP_32BIT | MALLOC_CAP_SPIRAM)
-#define LOADER_ALLOC_DATA(size) heap_caps_malloc(size, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM)
 
 #define LOADER_GETDATA(ctx, off, buffer, size) unalignedCpy(buffer, ctx->fd + off, size);
 
 typedef struct ELFLoaderSection_t {
-  void *data;
+  void *dataHeap;
+  void *dataExec;
   int secIdx;
   size_t size;
   off_t relSecIdx;
@@ -94,6 +93,34 @@ struct ELFLoaderContext_t {
 
   ELFLoaderSection_t *section;
 };
+
+/*** Memory allocation functions ***/
+
+// based on https://gist.github.com/igrr/ef5a3ad9f5fbf835f06c88b6b36defcc
+void *allocText(size_t size, void **execPtr) {
+  // 1. Allocate a buffer in PSRAM from heap
+  void *heapBuf = heap_caps_malloc(size, MALLOC_CAP_SPIRAM);
+
+  // 2. Find the physical address of this buffer
+  esp_paddr_t psram_buf_paddr = 0;
+  mmu_target_t out_target;
+  ESP_ERROR_CHECK(esp_mmu_vaddr_to_paddr(heapBuf, &psram_buf_paddr, &out_target));
+
+  // 3. Map the same physical pages to instruction bus
+  const size_t low_paddr = psram_buf_paddr & ~(CONFIG_MMU_PAGE_SIZE - 1);  // round down to page boundary
+  const size_t high_paddr =
+      (psram_buf_paddr + size + CONFIG_MMU_PAGE_SIZE - 1) & ~(CONFIG_MMU_PAGE_SIZE - 1);  // round up to page boundary
+  const size_t map_size = high_paddr - low_paddr;
+  void *mmap_ptr = NULL;
+  ESP_ERROR_CHECK(esp_mmu_map(0, map_size, MMU_TARGET_PSRAM0, MMU_MEM_CAP_EXEC, 0, &mmap_ptr));
+  esp_mmu_map_dump_mapped_blocks(stdout);
+
+  *execPtr = mmap_ptr + (psram_buf_paddr - low_paddr);
+
+  return heapBuf;
+}
+
+void *allocData(size_t size) { return heap_caps_malloc(size, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM); }
 
 /*** Read data functions ***/
 
@@ -295,7 +322,7 @@ static Elf32_Addr findSymAddr(ELFLoaderContext_t *ctx, Elf32_Sym *sym, const cha
     }
   }
   ELFLoaderSection_t *symSec = findSection(ctx, sym->st_shndx);
-  if (symSec) return ((Elf32_Addr)symSec->data) + sym->st_value;
+  if (symSec) return ((Elf32_Addr)symSec->dataHeap) + sym->st_value;
   return 0xffffffff;
 }
 
@@ -310,7 +337,7 @@ static int relocateSection(ELFLoaderContext_t *ctx, ELFLoaderSection_t *s) {
     MSG("  Section %s: no relocation index", name);
     return 0;
   }
-  if (!(s->data)) {
+  if (!(s->dataHeap)) {
     ERR("Section not loaded: %s", name);
     return -1;
   }
@@ -326,7 +353,7 @@ static int relocateSection(ELFLoaderContext_t *ctx, ELFLoaderSection_t *s) {
     char name[33] = "<unnamed>";
     int symEntry = ELF32_R_SYM(rel.r_info);
     int relType = ELF32_R_TYPE(rel.r_info);
-    Elf32_Addr relAddr = ((Elf32_Addr)s->data) + rel.r_offset;  // data to be updated adress
+    Elf32_Addr relAddr = ((Elf32_Addr)s->dataHeap) + rel.r_offset;  // data to be updated adress
     readSymbol(ctx, symEntry, &sym, name, sizeof(name));
     Elf32_Addr symAddr = findSymAddr(ctx, &sym, name) + rel.r_addend;  // target symbol adress
     uint32_t from = 0;
@@ -363,8 +390,8 @@ void elfLoaderFree(ELFLoaderContext_t *ctx) {
     ELFLoaderSection_t *section = ctx->section;
     ELFLoaderSection_t *next;
     while (section != NULL) {
-      if (section->data) {
-        free(section->data);
+      if (section->dataHeap) {
+        free(section->dataHeap);
       }
       next = section->next;
       free(section);
@@ -430,23 +457,23 @@ ELFLoaderContext_t *elfLoaderInitLoadAndRelocate(LOADER_FD_T fd, const ELFLoader
           section->next = ctx->section;
           ctx->section = section;
           if (sectHdr.sh_flags & SHF_EXECINSTR) {
-            section->data = LOADER_ALLOC_EXEC(sectHdr.sh_size);
+            section->dataHeap = allocText(sectHdr.sh_size, &section->dataExec);
           } else {
-            section->data = LOADER_ALLOC_DATA(sectHdr.sh_size);
+            section->dataHeap = allocData(sectHdr.sh_size);
           }
-          if (!section->data) {
+          if (!section->dataHeap) {
             ERR("Section malloc failled: %s", name);
             goto err;
           }
           section->secIdx = n;
           section->size = sectHdr.sh_size;
           if (sectHdr.sh_type != SHT_NOBITS) {
-            LOADER_GETDATA(ctx, sectHdr.sh_offset, section->data, sectHdr.sh_size);
+            LOADER_GETDATA(ctx, sectHdr.sh_offset, section->dataHeap, sectHdr.sh_size);
           }
           if (strcmp(name, ".text") == 0) {
-            ctx->text = section->data;
+            ctx->text = section->dataHeap;
           }
-          MSG("  section %2d: %-15s %08X %6li", n, name, (unsigned int)section->data, sectHdr.sh_size);
+          MSG("  section %2d: %-15s %08X %6li", n, name, (unsigned int)section->dataHeap, sectHdr.sh_size);
         }
       } else if (sectHdr.sh_type == SHT_RELA) {
         if (sectHdr.sh_info >= n) {
