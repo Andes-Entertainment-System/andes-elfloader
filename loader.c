@@ -61,6 +61,7 @@ static const char *TAG = "elfLoader";
 #define MSG(...) ESP_LOGI(TAG, __VA_ARGS__);
 #define ERR(...) ESP_LOGE(TAG, __VA_ARGS__);
 
+#include "esp_cache.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_mmu_map.h"
@@ -96,10 +97,20 @@ struct ELFLoaderContext_t {
 
 /*** Memory allocation functions ***/
 
+size_t roundDownMultiple(size_t value, size_t multiple) { return value & ~(multiple - 1); }
+size_t roundUpMultiple(size_t value, size_t multiple) { return (value + multiple - 1) & ~(multiple - 1); }
+
+void cacheSync(void *heapBuf, size_t size) {
+  size_t originalAddr = (size_t)heapBuf;
+  size_t alignedAddr = roundDownMultiple(originalAddr, CONFIG_ESP32S3_DATA_CACHE_LINE_SIZE);
+  size_t alignedSize = roundUpMultiple(size + originalAddr - alignedAddr, CONFIG_ESP32S3_DATA_CACHE_LINE_SIZE);
+  ESP_ERROR_CHECK(esp_cache_msync((void *)alignedAddr, alignedSize, 0));
+}
+
 // based on https://gist.github.com/igrr/ef5a3ad9f5fbf835f06c88b6b36defcc
 void *allocText(size_t size, void **execPtr) {
   // 1. Allocate a buffer in PSRAM from heap
-  void *heapBuf = heap_caps_malloc(size, MALLOC_CAP_SPIRAM);
+  void *heapBuf = heap_caps_malloc(roundUpMultiple(size, CONFIG_ESP32S3_DATA_CACHE_LINE_SIZE), MALLOC_CAP_SPIRAM);
 
   // 2. Find the physical address of this buffer
   esp_paddr_t psram_buf_paddr = 0;
@@ -107,15 +118,16 @@ void *allocText(size_t size, void **execPtr) {
   ESP_ERROR_CHECK(esp_mmu_vaddr_to_paddr(heapBuf, &psram_buf_paddr, &out_target));
 
   // 3. Map the same physical pages to instruction bus
-  const size_t low_paddr = psram_buf_paddr & ~(CONFIG_MMU_PAGE_SIZE - 1);  // round down to page boundary
-  const size_t high_paddr =
-      (psram_buf_paddr + size + CONFIG_MMU_PAGE_SIZE - 1) & ~(CONFIG_MMU_PAGE_SIZE - 1);  // round up to page boundary
+  const size_t low_paddr = roundDownMultiple(psram_buf_paddr, CONFIG_MMU_PAGE_SIZE);  // round down to page boundary
+  const size_t high_paddr = roundUpMultiple(psram_buf_paddr + size, CONFIG_MMU_PAGE_SIZE);  // round up to page boundary
   const size_t map_size = high_paddr - low_paddr;
+
   void *mmap_ptr = NULL;
-  ESP_ERROR_CHECK(esp_mmu_map(0, map_size, MMU_TARGET_PSRAM0, MMU_MEM_CAP_EXEC, 0, &mmap_ptr));
-  esp_mmu_map_dump_mapped_blocks(stdout);
+  esp_mmu_map(low_paddr, map_size, MMU_TARGET_PSRAM0, MMU_MEM_CAP_EXEC, 0, &mmap_ptr);
 
   *execPtr = mmap_ptr + (psram_buf_paddr - low_paddr);
+
+  cacheSync(heapBuf, size);
 
   return heapBuf;
 }
@@ -315,14 +327,14 @@ static ELFLoaderSection_t *findSection(ELFLoaderContext_t *ctx, int index) {
   return NULL;
 }
 
-static Elf32_Addr findSymAddr(ELFLoaderContext_t *ctx, Elf32_Sym *sym, const char *sName) {
+static Elf32_Addr findSymAddr(ELFLoaderContext_t *ctx, Elf32_Sym *sym, const char *sName, bool exec) {
   for (int i = 0; i < ctx->env->exported_size; i++) {
     if (strcmp(ctx->env->exported[i].name, sName) == 0) {
       return (Elf32_Addr)(ctx->env->exported[i].ptr);
     }
   }
   ELFLoaderSection_t *symSec = findSection(ctx, sym->st_shndx);
-  if (symSec) return ((Elf32_Addr)symSec->dataHeap) + sym->st_value;
+  if (symSec) return ((Elf32_Addr)(exec ? symSec->dataExec : symSec->dataHeap)) + sym->st_value;
   return 0xffffffff;
 }
 
@@ -355,7 +367,7 @@ static int relocateSection(ELFLoaderContext_t *ctx, ELFLoaderSection_t *s) {
     int relType = ELF32_R_TYPE(rel.r_info);
     Elf32_Addr relAddr = ((Elf32_Addr)s->dataHeap) + rel.r_offset;  // data to be updated adress
     readSymbol(ctx, symEntry, &sym, name, sizeof(name));
-    Elf32_Addr symAddr = findSymAddr(ctx, &sym, name) + rel.r_addend;  // target symbol adress
+    Elf32_Addr symAddr = findSymAddr(ctx, &sym, name, false) + rel.r_addend;  // target symbol adress
     uint32_t from = 0;
     uint32_t to = 0;
     if (relType == R_XTENSA_NONE || relType == R_XTENSA_ASM_EXPAND) {
@@ -508,6 +520,7 @@ ELFLoaderContext_t *elfLoaderInitLoadAndRelocate(LOADER_FD_T fd, const ELFLoader
     int r = 0;
     for (ELFLoaderSection_t *section = ctx->section; section != NULL; section = section->next) {
       r |= relocateSection(ctx, section);
+      cacheSync(section->dataHeap, section->size);
     }
     if (r != 0) {
       MSG("Relocation failed");
@@ -521,19 +534,21 @@ err:
   return NULL;
 }
 
-int elfLoaderSetFunc(ELFLoaderContext_t *ctx, const char *funcname) {
-  ctx->exec = 0;
+void *elfLoaderGetFunc(ELFLoaderContext_t *ctx, const char *funcname) {
+  ctx->exec = NULL;
+
   MSG("Scanning ELF symbols");
   MSG("  Sym  Symbol                         sect value    size relAddr");
+
   for (int symCount = 0; symCount < ctx->symtab_count; symCount++) {
     Elf32_Sym sym;
     char name[33] = "<unnamed>";
     if (readSymbol(ctx, symCount, &sym, name, sizeof(name)) != 0) {
       ERR("Error reading symbol");
-      return -1;
+      return NULL;
     }
     if (strcmp(name, funcname) == 0) {
-      Elf32_Addr symAddr = findSymAddr(ctx, &sym, name);
+      Elf32_Addr symAddr = findSymAddr(ctx, &sym, name, true);
       if (symAddr == 0xffffffff) {
         MSG("  %04X %-30s %04X %08lX %04lX ????????", symCount, name, sym.st_shndx, sym.st_value, sym.st_size);
       } else {
@@ -544,37 +559,12 @@ int elfLoaderSetFunc(ELFLoaderContext_t *ctx, const char *funcname) {
       MSG("  %04X %-30s %04X %08lX %04lX", symCount, name, sym.st_shndx, sym.st_value, sym.st_size);
     }
   }
-  if (ctx->exec == 0) {
+
+  if (ctx->exec == NULL) {
     ERR("Function symbol not found: %s", funcname);
-    return -1;
   }
-  return 0;
-}
 
-intptr_t elfLoaderRun(ELFLoaderContext_t *ctx, intptr_t arg) {
-  if (!ctx->exec) {
-    return 0;
-  }
-  typedef int (*func_t)(int);
-  func_t func = (func_t)ctx->exec;
-  MSG("Running...");
-  int r = func(arg);
-  MSG("Result: %08X", r);
-  return r;
-}
-
-int elfLoader(LOADER_FD_T fd, const ELFLoaderEnv_t *env, char *funcname, int arg) {
-  ELFLoaderContext_t *ctx = elfLoaderInitLoadAndRelocate(fd, env);
-  if (!ctx) {
-    return -1;
-  }
-  if (elfLoaderSetFunc(ctx, funcname) != 0) {
-    elfLoaderFree(ctx);
-    return -1;
-  }
-  int r = elfLoaderRun(ctx, arg);
-  elfLoaderFree(ctx);
-  return r;
+  return ctx->exec;
 }
 
 void *elfLoaderGetTextAddr(ELFLoaderContext_t *ctx) { return ctx->text; }
