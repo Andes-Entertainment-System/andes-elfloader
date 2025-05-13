@@ -1,8 +1,18 @@
 /*
- * A elf module loader for esp32
+ * ELF module loader for the Andes Entertainment System
+ *
+ * Author: SneezingCactus <sneezingcactus452@gmail.com>
+ * Copyright (C) 2025 SneezingCactus, lLicensed under GNU GPL v2 or later
+ *
+ * ---
+ *
+ * Based on the work of the esp32-elfloader project
+ * https://github.com/niicoooo/esp32-elfloader
  *
  * Author: niicoooo <1niicoooo1@gmail.com>
  * Copyright (C) 2017 by niicoooo <1niicoooo1@gmail.com>
+ *
+ * ---
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
