@@ -21,6 +21,8 @@ typedef struct {
 
 typedef struct ELFLoaderContext_t ELFLoaderContext_t;
 
+#define ELFLOADER_EXPORT_SYMBOL(name) {#name, (void *)name}
+
 void *elfLoaderGetFunc(ELFLoaderContext_t *ctx, const char *funcname);
 ELFLoaderContext_t *elfLoaderInitLoadAndRelocate(LOADER_FD_T fd, const ELFLoaderEnv_t *env);
 void elfLoaderFree(ELFLoaderContext_t *ctx);
