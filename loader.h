@@ -1,13 +1,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#if defined(__linux__)
-#define LOADER_FD_T FILE *
-#endif
-
-#if !(defined(__linux__))
 #define LOADER_FD_T void *
-#endif
 
 typedef struct {
   const char *name; /*!< Name of symbol */

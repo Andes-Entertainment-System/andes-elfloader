@@ -47,8 +47,6 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#define LOADER_FD_T void *
-
 typedef struct {
   const char *name; /*!< Name of symbol */
   void *ptr;        /*!< Pointer of symbol in memory */
