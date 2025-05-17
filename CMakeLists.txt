@@ -1,5 +1,5 @@
 idf_component_register(
-  SRCS "loader.c" "unaligned.c"
-  INCLUDE_DIRS "."
+  SRCS "loader.cpp" "unaligned.cpp"
+  INCLUDE_DIRS "include"
   REQUIRES esp_mm
 )
