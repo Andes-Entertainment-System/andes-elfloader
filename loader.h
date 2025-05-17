@@ -22,7 +22,7 @@ typedef struct {
   int secIdx;
   size_t size;
   off_t relSecIdx;
-  struct ELFLoaderSection_t *next;
+  ELFLoaderSection_t *next;
 } ELFLoaderSection_t;
 
 typedef struct {
