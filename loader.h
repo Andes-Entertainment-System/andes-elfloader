@@ -4,6 +4,7 @@
 #include <stdio.h>
 
 #define LOADER_FD_T void *
+#define ELFLOADER_EXPORT_SYMBOL(name) {#name, (void *)name}
 
 typedef struct {
   const char *name; /*!< Name of symbol */
@@ -15,9 +16,31 @@ typedef struct {
   unsigned int exported_size;        /*!< Elements on exported symbol array */
 } ELFLoaderEnv_t;
 
-typedef struct ELFLoaderContext_t ELFLoaderContext_t;
+typedef struct ELFLoaderSection_t {
+  void *dataHeap;
+  void *dataExec;
+  int secIdx;
+  size_t size;
+  off_t relSecIdx;
+  struct ELFLoaderSection_t *next;
+} ELFLoaderSection_t;
 
-#define ELFLOADER_EXPORT_SYMBOL(name) {#name, (void *)name}
+typedef struct ELFLoaderContext_t {
+  LOADER_FD_T fd;
+  void *exec;
+  void *text;
+  const ELFLoaderEnv_t *env;
+
+  size_t e_shnum;
+  off_t e_shoff;
+  off_t shstrtab_offset;
+
+  size_t symtab_count;
+  off_t symtab_offset;
+  off_t strtab_offset;
+
+  ELFLoaderSection_t *section;
+} ELFLoaderContext_t;
 
 void *elfLoaderGetFunc(ELFLoaderContext_t *ctx, const char *funcname);
 ELFLoaderContext_t *elfLoaderInitLoadAndRelocate(LOADER_FD_T fd, const ELFLoaderEnv_t *env);

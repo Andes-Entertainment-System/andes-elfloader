@@ -1,10 +1,5 @@
 #include "unaligned.h"
 
-#if INTERFACE
-#include <stddef.h>
-#include <stdint.h>
-#endif
-
 uint8_t unalignedGet8(void* src) {
   uintptr_t csrc = (uintptr_t)src;
   uint32_t v = *(uint32_t*)(csrc & 0xfffffffc);

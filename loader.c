@@ -43,24 +43,6 @@
 #include "elf.h"
 #include "unaligned.h"
 
-#if INTERFACE
-#include <stdint.h>
-#include <stdio.h>
-
-typedef struct {
-  const char *name; /*!< Name of symbol */
-  void *ptr;        /*!< Pointer of symbol in memory */
-} ELFLoaderSymbol_t;
-
-typedef struct {
-  const ELFLoaderSymbol_t *exported; /*!< Pointer to exported symbols array */
-  unsigned int exported_size;        /*!< Elements on exported symbol array */
-} ELFLoaderEnv_t;
-
-typedef struct ELFLoaderContext_t ELFLoaderContext_t;
-
-#endif
-
 static const char *TAG = "elfLoader";
 #define MSG(...) ESP_LOGI(TAG, __VA_ARGS__);
 #define ERR(...) ESP_LOGE(TAG, __VA_ARGS__);
@@ -72,32 +54,6 @@ static const char *TAG = "elfLoader";
 #include "esp_system.h"
 
 #define LOADER_GETDATA(ctx, off, buffer, size) unalignedCpy(buffer, ctx->fd + off, size);
-
-typedef struct ELFLoaderSection_t {
-  void *dataHeap;
-  void *dataExec;
-  int secIdx;
-  size_t size;
-  off_t relSecIdx;
-  struct ELFLoaderSection_t *next;
-} ELFLoaderSection_t;
-
-struct ELFLoaderContext_t {
-  LOADER_FD_T fd;
-  void *exec;
-  void *text;
-  const ELFLoaderEnv_t *env;
-
-  size_t e_shnum;
-  off_t e_shoff;
-  off_t shstrtab_offset;
-
-  size_t symtab_count;
-  off_t symtab_offset;
-  off_t strtab_offset;
-
-  ELFLoaderSection_t *section;
-};
 
 /*** Memory allocation functions ***/
 
