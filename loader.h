@@ -16,7 +16,7 @@ typedef struct {
   unsigned int exported_size;        /*!< Elements on exported symbol array */
 } ELFLoaderEnv_t;
 
-typedef struct ELFLoaderSection_t {
+typedef struct {
   void *dataHeap;
   void *dataExec;
   int secIdx;
@@ -25,7 +25,7 @@ typedef struct ELFLoaderSection_t {
   struct ELFLoaderSection_t *next;
 } ELFLoaderSection_t;
 
-typedef struct ELFLoaderContext_t {
+typedef struct {
   LOADER_FD_T fd;
   void *exec;
   void *text;
