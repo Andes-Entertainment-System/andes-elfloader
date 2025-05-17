@@ -1,4 +1,5 @@
 /* This file was automatically generated.  Do not edit! */
+#pragma once
 
 #include <stddef.h>
 #include <stdint.h>

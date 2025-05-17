@@ -1,5 +1,4 @@
-#ifndef _ELF_H
-#define _ELF_H 1
+#pragma once
 
 /* Standard ELF types.  */
 
