@@ -1200,5 +1200,3 @@ typedef struct {
 #define R_XTENSA_SLOT12_ALT 47
 #define R_XTENSA_SLOT13_ALT 48
 #define R_XTENSA_SLOT14_ALT 49
-
-#endif /* elf.h */
