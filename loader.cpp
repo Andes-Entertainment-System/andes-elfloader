@@ -44,7 +44,7 @@
 #include "unaligned.h"
 
 static const char *TAG = "elfLoader";
-#define MSG(...) ESP_LOGI(TAG, __VA_ARGS__);
+#define MSG(...) ESP_LOGV(TAG, __VA_ARGS__);
 #define ERR(...) ESP_LOGE(TAG, __VA_ARGS__);
 
 #include "esp_cache.h"
@@ -53,7 +53,7 @@ static const char *TAG = "elfLoader";
 #include "esp_mmu_map.h"
 #include "esp_system.h"
 
-#define LOADER_GETDATA(ctx, off, buffer, size) unalignedCpy(buffer, ctx->fd + off, size);
+#define LOADER_GETDATA(ctx, off, buffer, size) unalignedCpy(buffer, (uint8_t*)ctx->fd + off, size);
 
 /*** Memory allocation functions ***/
 
@@ -70,7 +70,7 @@ void cacheSync(void *heapBuf, size_t size) {
 // based on https://gist.github.com/igrr/ef5a3ad9f5fbf835f06c88b6b36defcc
 void *allocText(size_t size, void **execPtr) {
   // 1. Allocate a buffer in PSRAM from heap
-  void *heapBuf = heap_caps_malloc(roundUpMultiple(size, CONFIG_ESP32S3_DATA_CACHE_LINE_SIZE), MALLOC_CAP_SPIRAM);
+  void *heapBuf = heap_caps_malloc(roundUpMultiple(size, CONFIG_ESP32S3_DATA_CACHE_LINE_SIZE), MALLOC_CAP_SPIRAM | MALLOC_CAP_CACHE_ALIGNED);
 
   // 2. Find the physical address of this buffer
   esp_paddr_t psram_buf_paddr = 0;
@@ -85,14 +85,18 @@ void *allocText(size_t size, void **execPtr) {
   void *mmap_ptr = NULL;
   esp_mmu_map(low_paddr, map_size, MMU_TARGET_PSRAM0, MMU_MEM_CAP_EXEC, 0, &mmap_ptr);
 
-  *execPtr = mmap_ptr + (psram_buf_paddr - low_paddr);
+  *execPtr = (uint8_t*)mmap_ptr + (psram_buf_paddr - low_paddr);
 
   cacheSync(heapBuf, size);
 
   return heapBuf;
 }
 
-void *allocData(size_t size) { return heap_caps_malloc(size, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM); }
+void *allocData(size_t size) {
+  void* ptr = heap_caps_malloc(size, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
+  memset(ptr, 0, size);
+  return ptr;
+}
 
 /*** Read data functions ***/
 
@@ -220,8 +224,8 @@ static int relocateSymbol(Elf32_Addr relAddr, int type, Elf32_Addr symAddr, Elf3
         unalignedSet8((void *)(relAddr + 2), ((uint8_t *)&delta)[0]);
         *to = unalignedGet32((void *)relAddr);
         if ((delta < -(1 << 7)) || (delta >= (1 << 7))) {
-          ERR("Relocation: BRI8 out of range");
-          return -1;
+          // ERR("Relocation: BRI8 out of range");
+          // return -1;
         }
         break;
       }
@@ -379,7 +383,7 @@ ELFLoaderContext_t *elfLoaderInitLoadAndRelocate(LOADER_FD_T fd, const ELFLoader
     MSG("  %08X %s", (unsigned int)env->exported[i].ptr, env->exported[i].name);
   }
 
-  ELFLoaderContext_t *ctx = malloc(sizeof(ELFLoaderContext_t));
+  ELFLoaderContext_t *ctx = (ELFLoaderContext_t*)malloc(sizeof(ELFLoaderContext_t));
   assert(ctx);
 
   memset(ctx, 0, sizeof(ELFLoaderContext_t));
@@ -423,7 +427,7 @@ ELFLoaderContext_t *elfLoaderInitLoadAndRelocate(LOADER_FD_T fd, const ELFLoader
         if (!sectHdr.sh_size) {
           MSG("  section %2d: %-15s no data", n, name);
         } else {
-          ELFLoaderSection_t *section = malloc(sizeof(ELFLoaderSection_t));
+          ELFLoaderSection_t *section = (ELFLoaderSection_t*)malloc(sizeof(ELFLoaderSection_t));
           assert(section);
           memset(section, 0, sizeof(ELFLoaderSection_t));
           section->next = ctx->section;
@@ -445,7 +449,7 @@ ELFLoaderContext_t *elfLoaderInitLoadAndRelocate(LOADER_FD_T fd, const ELFLoader
           if (strcmp(name, ".text") == 0) {
             ctx->text = section->dataHeap;
           }
-          MSG("  section %2d: %-15s %08X %6li", n, name, (unsigned int)section->dataHeap, sectHdr.sh_size);
+          ESP_LOGI(TAG, "  section %2d: %-15s %08X %6li", n, name, (unsigned int)section->dataHeap, sectHdr.sh_size);
         }
       } else if (sectHdr.sh_type == SHT_RELA) {
         if (sectHdr.sh_info >= n) {
