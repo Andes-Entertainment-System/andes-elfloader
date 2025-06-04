@@ -449,7 +449,7 @@ ELFLoaderContext_t *elfLoaderInitLoadAndRelocate(LOADER_FD_T fd, const ELFLoader
           if (strcmp(name, ".text") == 0) {
             ctx->text = section->dataHeap;
           }
-          ESP_LOGI(TAG, "  section %2d: %-15s %08X %6li", n, name, (unsigned int)section->dataHeap, sectHdr.sh_size);
+          ESP_LOGI(TAG, "  section %2d: %-15s %08X %08X %6li", n, name, (unsigned int)section->dataHeap, (unsigned int)section->dataExec, sectHdr.sh_size);
         }
       } else if (sectHdr.sh_type == SHT_RELA) {
         if (sectHdr.sh_info >= n) {
