@@ -5,6 +5,7 @@
 
 #define LOADER_FD_T void *
 #define ELFLOADER_EXPORT_SYMBOL(name) {#name, (void *)name}
+#define ELFLOADER_EXPORT_SYMBOL_ALTNAME(name, ptr) {name, (void *)ptr}
 
 struct ELFLoaderSymbol_t {
   const char *name; /*!< Name of symbol */
