@@ -53,7 +53,7 @@ static const char *TAG = "elfLoader";
 #include "esp_mmu_map.h"
 #include "esp_system.h"
 
-#define LOADER_GETDATA(ctx, off, buffer, size) unalignedCpy(buffer, (uint8_t*)ctx->fd + off, size);
+#define LOADER_GETDATA(ctx, off, buffer, size) unalignedCpy(buffer, (uint8_t *)ctx->fd + off, size);
 
 /*** Memory allocation functions ***/
 
@@ -70,7 +70,8 @@ void cacheSync(void *heapBuf, size_t size) {
 // based on https://gist.github.com/igrr/ef5a3ad9f5fbf835f06c88b6b36defcc
 void *allocText(size_t size, void **execPtr) {
   // 1. Allocate a buffer in PSRAM from heap
-  void *heapBuf = heap_caps_malloc(roundUpMultiple(size, CONFIG_ESP32S3_DATA_CACHE_LINE_SIZE), MALLOC_CAP_SPIRAM | MALLOC_CAP_CACHE_ALIGNED);
+  void *heapBuf = heap_caps_malloc(roundUpMultiple(size, CONFIG_ESP32S3_DATA_CACHE_LINE_SIZE),
+                                   MALLOC_CAP_SPIRAM | MALLOC_CAP_CACHE_ALIGNED);
 
   // 2. Find the physical address of this buffer
   esp_paddr_t psram_buf_paddr = 0;
@@ -85,7 +86,7 @@ void *allocText(size_t size, void **execPtr) {
   void *mmap_ptr = NULL;
   esp_mmu_map(low_paddr, map_size, MMU_TARGET_PSRAM0, MMU_MEM_CAP_EXEC, 0, &mmap_ptr);
 
-  *execPtr = (uint8_t*)mmap_ptr + (psram_buf_paddr - low_paddr);
+  *execPtr = (uint8_t *)mmap_ptr + (psram_buf_paddr - low_paddr);
 
   cacheSync(heapBuf, size);
 
@@ -93,7 +94,7 @@ void *allocText(size_t size, void **execPtr) {
 }
 
 void *allocData(size_t size) {
-  void* ptr = heap_caps_malloc(size, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
+  void *ptr = heap_caps_malloc(size, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
   memset(ptr, 0, size);
   return ptr;
 }
@@ -149,8 +150,8 @@ static const char *type2String(int symt) {
 #undef STRCASE
 }
 
-static int relocateSymbol(Elf32_Addr relAddr, int type, Elf32_Addr symAddr, Elf32_Addr defAddr, uint32_t *from,
-                          uint32_t *to) {
+static int relocateSymbol(Elf32_Addr relAddr, int type, Elf32_Addr symAddr, Elf32_Addr symAddrExec, Elf32_Addr defAddr,
+                          uint32_t *from, uint32_t *to) {
   if (symAddr == 0xffffffff) {
     if (defAddr == 0x00000000) {
       ERR("Relocation: undefined symAddr");
@@ -162,7 +163,7 @@ static int relocateSymbol(Elf32_Addr relAddr, int type, Elf32_Addr symAddr, Elf3
   switch (type) {
     case R_XTENSA_32: {
       *from = unalignedGet32((void *)relAddr);
-      *to = symAddr + *from;
+      *to = (symAddrExec != 0 ? symAddrExec : symAddr) + *from;
       unalignedSet32((void *)relAddr, *to);
       break;
     }
@@ -298,6 +299,9 @@ static Elf32_Addr findSymAddr(ELFLoaderContext_t *ctx, Elf32_Sym *sym, const cha
     }
   }
   ELFLoaderSection_t *symSec = findSection(ctx, sym->st_shndx);
+  if (exec && symSec && symSec->dataExec == NULL) {
+    return 0;
+  }
   if (symSec) return ((Elf32_Addr)(exec ? symSec->dataExec : symSec->dataHeap)) + sym->st_value;
   return 0xffffffff;
 }
@@ -318,7 +322,7 @@ static int relocateSection(ELFLoaderContext_t *ctx, ELFLoaderSection_t *s) {
     return -1;
   }
 
-  MSG("  Section %s", name);
+  ESP_LOGI(TAG, "  Section %s", name);
   int r = 0;
   Elf32_Rela rel;
   size_t relEntries = sectHdr.sh_size / sizeof(rel);
@@ -329,9 +333,13 @@ static int relocateSection(ELFLoaderContext_t *ctx, ELFLoaderSection_t *s) {
     char name[33] = "<unnamed>";
     int symEntry = ELF32_R_SYM(rel.r_info);
     int relType = ELF32_R_TYPE(rel.r_info);
+
     Elf32_Addr relAddr = ((Elf32_Addr)s->dataHeap) + rel.r_offset;  // data to be updated adress
+
     readSymbol(ctx, symEntry, &sym, name, sizeof(name));
     Elf32_Addr symAddr = findSymAddr(ctx, &sym, name, false) + rel.r_addend;  // target symbol adress
+    Elf32_Addr symAddrExec = findSymAddr(ctx, &sym, name, true);
+    if (symAddrExec != 0) symAddrExec += rel.r_addend;
     uint32_t from = 0;
     uint32_t to = 0;
     if (relType == R_XTENSA_NONE || relType == R_XTENSA_ASM_EXPAND) {
@@ -342,7 +350,7 @@ static int relocateSection(ELFLoaderContext_t *ctx, ELFLoaderSection_t *s) {
       MSG("  %08lX %04X %04X %-20s %08lX %08lX %08lX %s + %lX", rel.r_offset, symEntry, relType, type2String(relType),
           relAddr, symAddr, sym.st_value, name, rel.r_addend);
       r = -1;
-    } else if (relocateSymbol(relAddr, relType, symAddr, sym.st_value, &from, &to) != 0) {
+    } else if (relocateSymbol(relAddr, relType, symAddr, symAddrExec, sym.st_value, &from, &to) != 0) {
       ERR("  %08lX %04X %04X %-20s %08lX %08lX %08lX %08lX->%08lX %s + %lX", rel.r_offset, symEntry, relType,
           type2String(relType), relAddr, symAddr, sym.st_value, from, to, name, rel.r_addend);
       r = -1;
@@ -383,7 +391,7 @@ ELFLoaderContext_t *elfLoaderInitLoadAndRelocate(LOADER_FD_T fd, const ELFLoader
     MSG("  %08X %s", (unsigned int)env->exported[i].ptr, env->exported[i].name);
   }
 
-  ELFLoaderContext_t *ctx = (ELFLoaderContext_t*)malloc(sizeof(ELFLoaderContext_t));
+  ELFLoaderContext_t *ctx = (ELFLoaderContext_t *)malloc(sizeof(ELFLoaderContext_t));
   assert(ctx);
 
   memset(ctx, 0, sizeof(ELFLoaderContext_t));
@@ -427,7 +435,7 @@ ELFLoaderContext_t *elfLoaderInitLoadAndRelocate(LOADER_FD_T fd, const ELFLoader
         if (!sectHdr.sh_size) {
           MSG("  section %2d: %-15s no data", n, name);
         } else {
-          ELFLoaderSection_t *section = (ELFLoaderSection_t*)malloc(sizeof(ELFLoaderSection_t));
+          ELFLoaderSection_t *section = (ELFLoaderSection_t *)malloc(sizeof(ELFLoaderSection_t));
           assert(section);
           memset(section, 0, sizeof(ELFLoaderSection_t));
           section->next = ctx->section;
@@ -449,7 +457,8 @@ ELFLoaderContext_t *elfLoaderInitLoadAndRelocate(LOADER_FD_T fd, const ELFLoader
           if (strcmp(name, ".text") == 0) {
             ctx->text = section->dataHeap;
           }
-          ESP_LOGI(TAG, "  section %2d: %-15s %08X %08X %6li", n, name, (unsigned int)section->dataHeap, (unsigned int)section->dataExec, sectHdr.sh_size);
+          ESP_LOGI(TAG, "  section %2d: %-15s %08X %08X %6li", n, name, (unsigned int)section->dataHeap,
+                   (unsigned int)section->dataExec, sectHdr.sh_size);
         }
       } else if (sectHdr.sh_type == SHT_RELA) {
         if (sectHdr.sh_info >= n) {
